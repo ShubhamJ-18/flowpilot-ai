@@ -1,0 +1,229 @@
+// FlowPilot AI — Prisma Schema
+// Database Engine: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum WorkflowStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum RunStatus {
+  QUEUED
+  RUNNING
+  WAITING_FOR_APPROVAL
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum StepRunStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(USER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sessions         Session[]
+  workflows        Workflow[]
+  workflowRuns     WorkflowRun[]
+  integrations     Integration[]
+  scheduledTriggers ScheduledTrigger[]
+  usageRecords     UsageRecord[]
+  auditLogs        AuditLog[]
+
+  @@index([email])
+}
+
+model Session {
+  id               String   @id @default(uuid())
+  sessionTokenHash String   @unique
+  userId           String
+  ipAddress        String?
+  userAgent        String?
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([sessionTokenHash])
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Workflow {
+  id          String         @id @default(uuid())
+  ownerId     String
+  name        String
+  description String?
+  status      WorkflowStatus @default(DRAFT)
+  definition  Json           // Validated graph JSON { nodes: [], edges: [] }
+  version     Int            @default(1)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  owner             User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  versions          WorkflowVersion[]
+  runs              WorkflowRun[]
+  scheduledTriggers ScheduledTrigger[]
+
+  @@index([ownerId])
+  @@index([status])
+}
+
+model WorkflowVersion {
+  id         String   @id @default(uuid())
+  workflowId String
+  version    Int
+  definition Json
+  createdAt  DateTime @default(now())
+  createdBy  String
+
+  workflow     Workflow      @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workflowRuns WorkflowRun[]
+
+  @@unique([workflowId, version])
+  @@index([workflowId])
+}
+
+model WorkflowRun {
+  id                String    @id @default(uuid())
+  workflowId        String
+  workflowVersionId String?
+  triggeredBy       String    // User ID or "SCHEDULED" or "API"
+  status            RunStatus @default(QUEUED)
+  input             Json?     @default("{}")
+  output            Json?     @default("{}")
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  errorSummary      String?
+  idempotencyKey    String?   @unique
+  createdAt         DateTime  @default(now())
+
+  workflow        Workflow          @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workflowVersion WorkflowVersion?  @relation(fields: [workflowVersionId], references: [id], onDelete: SetNull)
+  user            User              @relation(fields: [triggeredBy], references: [id], onDelete: Cascade)
+  stepRuns        WorkflowStepRun[]
+  usageRecords    UsageRecord[]
+
+  @@index([workflowId])
+  @@index([triggeredBy])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model WorkflowStepRun {
+  id            String        @id @default(uuid())
+  workflowRunId String
+  nodeId        String
+  nodeType      String
+  status        StepRunStatus @default(QUEUED)
+  attempt       Int           @default(1)
+  input         Json?         @default("{}")
+  output        Json?         @default("{}")
+  errorSummary  String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  durationMs    Int?
+  createdAt     DateTime      @default(now())
+
+  workflowRun WorkflowRun @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+
+  @@index([workflowRunId])
+  @@index([nodeId])
+  @@index([status])
+}
+
+model Integration {
+  id                   String   @id @default(uuid())
+  ownerId              String
+  provider             String   // e.g. "WEBHOOK", "SLACK", "EMAIL"
+  displayName          String
+  encryptedCredentials String   // AES-256-GCM encrypted payload
+  status               String   @default("ACTIVE") // "ACTIVE", "REVOKED"
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@index([provider])
+}
+
+model ScheduledTrigger {
+  id             String    @id @default(uuid())
+  workflowId     String
+  ownerId        String
+  cronExpression String
+  timezone       String    @default("UTC")
+  enabled        Boolean   @default(true)
+  nextRunAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  owner    User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId])
+  @@index([ownerId])
+  @@index([enabled])
+}
+
+model UsageRecord {
+  id            String   @id @default(uuid())
+  ownerId       String
+  workflowRunId String?
+  provider      String   // "mock", "openai", "gemini", etc.
+  model         String
+  inputTokens   Int      @default(0)
+  outputTokens  Int      @default(0)
+  estimatedCost Float    @default(0.0)
+  createdAt     DateTime @default(now())
+
+  owner       User         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  workflowRun WorkflowRun? @relation(fields: [workflowRunId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId])
+  @@index([workflowRunId])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  actorId      String?
+  action       String   // e.g. "AUTH_LOGIN", "WORKFLOW_CREATE", "WORKFLOW_RUN"
+  entityType   String   // e.g. "User", "Workflow", "WorkflowRun"
+  entityId     String?
+  safeMetadata Json?    @default("{}")
+  createdAt    DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}

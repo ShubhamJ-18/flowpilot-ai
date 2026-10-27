@@ -1,0 +1,18 @@
+{
+  "name": "@flowpilot/shared",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./registry": "./src/registry.js",
+    "./validator": "./src/validator.js",
+    "./evaluator": "./src/evaluator.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  }
+}
